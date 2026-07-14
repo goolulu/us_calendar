@@ -1,20 +1,20 @@
-# 美国经济数据日历
+# U.S. Economic Calendar
 
-一个运行在 Cloudflare Workers 上的公开 iCalendar 订阅服务，面向 iPhone、iPad 和 macOS 日历。
+A public iCalendar subscription service for iPhone, iPad, and macOS Calendar, deployed on Cloudflare Workers.
 
-日历包含：
+The calendar includes:
 
-- 美国 CPI、PPI、PCE（含核心 PCE）
-- ADP 就业报告（小非农）
-- Employment Situation / NFP（大非农）
-- 每周初请和续请失业金人数
-- FOMC 利率决议
+- U.S. CPI, PPI, and PCE releases, including Core PCE
+- ADP National Employment Report
+- Employment Situation / Nonfarm Payrolls (NFP)
+- Weekly initial and continuing unemployment claims
+- FOMC interest rate decisions
 
-只提供公布日程，不提供预测值或公布后的实际值。所有事件按 `America/New_York` 创建，iOS 会自动换算到本地时区。
+The service publishes release schedules only. It does not include market forecasts or actual values after publication. Events use the `America/New_York` time zone, and calendar clients automatically convert them to the user's local time.
 
-## 本地运行
+## Local Development
 
-需要 Node.js 20 或更高版本。
+Node.js 20 or later is required.
 
 ```bash
 npm install
@@ -23,46 +23,79 @@ npm run typecheck
 npm run dev
 ```
 
-本地地址：
+Local endpoints:
 
-- 订阅说明：`http://localhost:8787/`
-- 日历：`http://localhost:8787/calendar.ics`
-- 数据源状态：`http://localhost:8787/health`
+- Subscription page: `http://localhost:8787/`
+- Calendar feed: `http://localhost:8787/calendar.ics`
+- Source health: `http://localhost:8787/health`
 
-## 部署
+## Deployment
 
-先登录 Cloudflare，然后部署：
+Log in to Cloudflare and deploy the Worker:
 
 ```bash
 npx wrangler login
 npm run deploy
 ```
 
-部署完成后会得到类似下面的地址：
+After deployment, the subscription URL will look like this:
 
 ```text
-https://us-economic-calendar.<你的 workers 子域>.workers.dev/calendar.ics
+https://us-economic-calendar.<your-workers-subdomain>.workers.dev/calendar.ics
 ```
 
-在 iPhone 中打开 Worker 首页并点击“在 iPhone 中订阅”，或者进入：
+On an iPhone, open the Worker landing page and select **Subscribe on iPhone**. Alternatively, navigate to:
 
-`设置 → App → 日历 → 日历账户 → 添加账户 → 其他 → 添加已订阅的日历`
+`Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add Subscribed Calendar`
 
-然后粘贴 `.ics` 地址。不同 iOS 版本的设置菜单名称可能略有不同。
+Paste the `.ics` URL into the Server field. Menu names may differ slightly between iOS versions.
 
-## 数据来源与更新
+## Endpoints
 
-- [BLS Release Calendar](https://www.bls.gov/schedule/)：CPI、PPI、非农
-- [BEA Release Schedule](https://www.bea.gov/news/schedule/)：PCE
-- [ADP National Employment Report](https://adpemploymentreport.com/)：小非农
-- [DOL Economic Data](https://www.dol.gov/newsroom/economicdata)：初请和续请失业金
-- [Federal Reserve FOMC Calendar](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm)：FOMC
+### `GET /calendar.ics`
 
-Worker 每 6 小时更新缓存。官方页面抓取失败时，会按数据源分别使用 `src/generated.ts` 中已经核验的日程，不会让整个订阅失效。BLS、BEA 或 ADP 公布新一年度日程后，应同步更新这里的兜底记录并运行测试。失业金报告通常在周四 08:30（美国东部时间）公布；与联邦假日冲突时自动移到周三。
+Returns the public UTF-8 iCalendar feed. The response is cached for six hours and includes the `text/calendar` content type.
 
-## 实现约定
+### `GET /health`
 
-- 事件 UID 使用数据类别和报告期，而不是公布日期；官方改期不会在订阅端制造重复事件。
-- FOMC 事件记录会议最后一天 14:00 的决议公布时间，不包含会议纪要。
-- 日历覆盖最近 90 天到未来 15 个月，不内置提醒。
-- 订阅地址公开，无 Token、账号或数据库。
+Returns the generation time, number of available events, and the status of each upstream source. A source can have one of these states:
+
+- `ok`: live official schedule data was available
+- `fallback`: the verified local schedule was used
+- `unavailable`: neither live nor fallback data was available
+
+### `GET /`
+
+Returns a small landing page containing a `webcal://` subscription link and the HTTPS calendar URL.
+
+## Data Sources
+
+- [BLS Release Calendar](https://www.bls.gov/schedule/) for CPI, PPI, and NFP
+- [BEA Release Schedule](https://www.bea.gov/news/schedule/) for PCE
+- [ADP National Employment Report](https://adpemploymentreport.com/) for private employment
+- [DOL Economic Data](https://www.dol.gov/newsroom/economicdata) for unemployment claims
+- [Federal Reserve FOMC Calendar](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm) for rate decisions
+
+The Worker refreshes its cached output every six hours. If an official page cannot be reached or parsed, that source independently falls back to the verified schedule in `src/generated.ts`, so one upstream failure does not break the entire feed.
+
+When BLS, BEA, or ADP publishes a new annual schedule, update the fallback records in `src/generated.ts` and run the test suite. Weekly unemployment claims are normally scheduled for Thursday at 8:30 a.m. Eastern Time. A release that conflicts with a federal holiday is moved to Wednesday.
+
+## Calendar Behavior
+
+- Event UIDs are based on the release category and reporting period rather than the publication date. Rescheduled releases therefore update the existing event instead of creating duplicates.
+- FOMC events represent the interest rate decision at 2:00 p.m. Eastern Time on the final meeting day. FOMC minutes are not included.
+- The feed covers the previous 90 days and the next 15 months.
+- Events do not contain forced alarms or reminders.
+- The feed is public and does not require a token, account, or database.
+
+## Testing
+
+Run all automated checks with:
+
+```bash
+npm test
+npm run typecheck
+npx wrangler deploy --dry-run
+```
+
+The tests cover official schedule parsing, source-specific fallback behavior, stable event identifiers, unemployment-claims holiday adjustments, iCalendar line folding, UTF-8 content, and CRLF formatting.
