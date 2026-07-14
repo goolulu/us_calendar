@@ -1,0 +1,10 @@
+name = "us-economic-calendar"
+main = "src/index.ts"
+compatibility_date = "2026-07-14"
+
+[observability]
+enabled = true
+
+# 可选：设置后，/calendar.ics 必须携带 ?token=对应值
+# [vars]
+# CALENDAR_TOKEN = "change-me"
