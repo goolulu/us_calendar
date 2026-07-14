@@ -2,6 +2,16 @@
 
 A public iCalendar subscription service for iPhone, iPad, and macOS Calendar, deployed on Cloudflare Workers.
 
+## Live Calendar
+
+Subscribe using the public calendar URL:
+
+**[https://us-calendar.hrn961110.workers.dev/calendar.ics](https://us-calendar.hrn961110.workers.dev/calendar.ics)**
+
+On Apple devices, you can also open this one-click subscription link:
+
+**[Subscribe in Apple Calendar](webcal://us-calendar.hrn961110.workers.dev/calendar.ics)**
+
 The calendar includes:
 
 - U.S. CPI, PPI, and PCE releases, including Core PCE
@@ -49,6 +59,10 @@ On an iPhone, open the Worker landing page and select **Subscribe on iPhone**. A
 `Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add Subscribed Calendar`
 
 Paste the `.ics` URL into the Server field. Menu names may differ slightly between iOS versions.
+
+```text
+https://us-calendar.hrn961110.workers.dev/calendar.ics
+```
 
 ## Endpoints
 
