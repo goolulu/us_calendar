@@ -20,7 +20,7 @@ The calendar includes:
 - Weekly initial and continuing unemployment claims
 - FOMC interest rate decisions
 
-The service publishes release schedules only. It does not include market forecasts or actual values after publication. Events use the `America/New_York` time zone, and calendar clients automatically convert them to the user's local time.
+The service uses official agency schedules for release times. When an FMP API key is configured, event descriptions are enriched with selected previous and actual values. Events use the `America/New_York` time zone, and calendar clients automatically convert them to the user's local time.
 
 ## Local Development
 
@@ -45,8 +45,11 @@ Log in to Cloudflare and deploy the Worker:
 
 ```bash
 npx wrangler login
+npx wrangler secret put FMP_API_KEY
 npm run deploy
 ```
+
+`FMP_API_KEY` is optional. Without it, or whenever FMP is unavailable, the Worker continues publishing the official release schedule without values. Do not add the key to `wrangler.toml` or commit it to the repository.
 
 After deployment, the subscription URL will look like this:
 
@@ -72,7 +75,7 @@ Returns the public UTF-8 iCalendar feed. The response is cached for six hours an
 
 ### `GET /health`
 
-Returns the generation time, number of available events, and the status of each upstream source. A source can have one of these states:
+Returns the generation time, number of available events, the status of each schedule source, and FMP value coverage. A schedule source can have one of these states:
 
 - `ok`: live official schedule data was available
 - `fallback`: the verified local schedule was used
@@ -89,14 +92,18 @@ Returns a small landing page containing a `webcal://` subscription link and the 
 - [ADP National Employment Report](https://adpemploymentreport.com/) for private employment
 - [DOL Economic Data](https://www.dol.gov/newsroom/economicdata) for unemployment claims
 - [Federal Reserve FOMC Calendar](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm) for rate decisions
+- [Financial Modeling Prep Economic Calendar](https://site.financialmodelingprep.com/developer/docs/stable/economics-calendar) for optional previous and actual values
 
 The Worker refreshes its cached output every six hours. If an official page cannot be reached or parsed, that source independently falls back to the verified schedule in `src/generated.ts`, so one upstream failure does not break the entire feed.
+
+FMP data is requested in 90-day ranges and cached separately for six hours. It only enriches an event after a known U.S. indicator name and release date match. It never overrides the official release time or source. The free plan and endpoint access can change; confirm that your FMP account permits the endpoint and your intended use before publishing the enriched feed.
 
 When BLS, BEA, or ADP publishes a new annual schedule, update the fallback records in `src/generated.ts` and run the test suite. Weekly unemployment claims are normally scheduled for Thursday at 8:30 a.m. Eastern Time. A release that conflicts with a federal holiday is moved to Wednesday.
 
 ## Calendar Behavior
 
 - Event UIDs are based on the release category and reporting period rather than the publication date. Rescheduled releases therefore update the existing event instead of creating duplicates.
+- Previous and actual values appear in the event description. FMP forecast values are intentionally not included.
 - FOMC events represent the interest rate decision at 2:00 p.m. Eastern Time on the final meeting day. FOMC minutes are not included.
 - The feed covers the previous 90 days and the next 15 months.
 - Events do not contain forced alarms or reminders.

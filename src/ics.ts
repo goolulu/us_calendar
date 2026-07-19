@@ -1,5 +1,5 @@
 import { addMinutes, formatIcsLocal } from "./date";
-import type { CalendarEvent } from "./types";
+import type { CalendarEvent, EconomicMetric } from "./types";
 
 function escapeText(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/,/g, "\\,").replace(/;/g, "\\;");
@@ -25,6 +25,18 @@ function foldLine(line: string): string[] {
 
 function stamp(date: Date): string {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function metricLines(metrics: EconomicMetric[] | undefined): string {
+  if (!metrics?.length) return "";
+  const lines = metrics.map((metric) => {
+    const values = [
+      ...(metric.previous !== undefined ? [`前值 ${metric.previous}`] : []),
+      ...(metric.actual !== undefined ? [`实际值 ${metric.actual}`] : []),
+    ];
+    return `• ${metric.label}：${values.join("；")}`;
+  });
+  return `\n\n关键数据：\n${lines.join("\n")}`;
 }
 
 export function createIcs(events: CalendarEvent[], now = new Date()): string {
@@ -68,7 +80,7 @@ export function createIcs(events: CalendarEvent[], now = new Date()): string {
       `DTSTART;TZID=America/New_York:${formatIcsLocal(event.start)}00`,
       `DTEND;TZID=America/New_York:${formatIcsLocal(addMinutes(event.start, event.durationMinutes))}00`,
       `SUMMARY:${escapeText(event.title)}`,
-      `DESCRIPTION:${escapeText(`${event.description}\n时间均为美国东部时间，iOS 会自动换算为本地时间。`)}`,
+      `DESCRIPTION:${escapeText(`${event.description}${metricLines(event.metrics)}\n时间均为美国东部时间，iOS 会自动换算为本地时间。`)}`,
       `URL:${event.sourceUrl}`,
       `CATEGORIES:${event.category.toUpperCase()}`,
       "STATUS:CONFIRMED",
