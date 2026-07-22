@@ -1,4 +1,4 @@
-export type Category = "cpi" | "ppi" | "pce" | "nfp" | "adp" | "claims" | "fomc";
+export type Category = "cpi" | "ppi" | "pce" | "nfp" | "adp" | "claims" | "fomc" | "earnings";
 
 export interface EconomicMetric {
   /** Stable identifier within a release category, for example cpi-yoy. */
@@ -15,8 +15,11 @@ export interface CalendarEvent {
   category: Category;
   title: string;
   description: string;
-  start: string; // America/New_York local time, YYYY-MM-DDTHH:mm
+  /** America/New_York local time (YYYY-MM-DDTHH:mm), or YYYY-MM-DD when allDay is true. */
+  start: string;
   durationMinutes: number;
+  /** Emit a DATE-valued event instead of a time-zone-aware event. */
+  allDay?: boolean;
   sourceUrl: string;
   metrics?: EconomicMetric[];
 }
@@ -24,10 +27,12 @@ export interface CalendarEvent {
 export type SourceState = "ok" | "fallback" | "unavailable";
 
 export interface SourceStatus {
-  source: "bls" | "bea" | "adp" | "dol" | "fomc";
+  source: "bls" | "bea" | "adp" | "dol" | "fomc" | "nasdaq-earnings" | "sp500-members" | "nasdaq100-members";
   state: SourceState;
   events: number;
   detail?: string;
+  updatedAt?: string;
+  coverage?: { from: string; to: string; missingDates: number };
 }
 
 export interface ValueStatus {

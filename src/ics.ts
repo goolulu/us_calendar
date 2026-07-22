@@ -6,21 +6,33 @@ function escapeText(value: string): string {
 }
 
 function foldLine(line: string): string[] {
-  const encoder = new TextEncoder();
   const result: string[] = [];
   let current = "";
-  let limit = 75;
+  let currentBytes = 0;
   for (const char of line) {
-    if (encoder.encode(current + char).length > limit) {
+    const codePoint = char.codePointAt(0)!;
+    const charBytes = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    if (currentBytes + charBytes > 75) {
       result.push(current);
       current = ` ${char}`;
-      limit = 75;
+      currentBytes = 1 + charBytes;
     } else {
       current += char;
+      currentBytes += charBytes;
     }
   }
   if (current) result.push(current);
   return result;
+}
+
+function formatIcsDate(date: string): string {
+  return date.slice(0, 10).replace(/-/g, "");
+}
+
+function nextIcsDate(date: string): string {
+  const [year, month, day] = date.slice(0, 10).split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  return `${next.getUTCFullYear()}${String(next.getUTCMonth() + 1).padStart(2, "0")}${String(next.getUTCDate()).padStart(2, "0")}`;
 }
 
 function stamp(date: Date): string {
@@ -46,8 +58,8 @@ export function createIcs(events: CalendarEvent[], now = new Date()): string {
     "PRODID:-//US Economic Calendar//CN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    "X-WR-CALNAME:美国重要经济数据",
-    "X-WR-CALDESC:CPI、PPI、PCE、ADP、非农、初请失业金及 FOMC",
+    "X-WR-CALNAME:美国经济数据与重点公司财报",
+    "X-WR-CALDESC:美国重要经济数据以及 S&P 500\\,Nasdaq-100 公司财报日历",
     "X-WR-TIMEZONE:America/New_York",
     "REFRESH-INTERVAL;VALUE=DURATION:PT6H",
     "X-PUBLISHED-TTL:PT6H",
@@ -73,12 +85,20 @@ export function createIcs(events: CalendarEvent[], now = new Date()): string {
   const unique = [...new Map(events.map((event) => [event.id, event])).values()]
     .sort((a, b) => a.start.localeCompare(b.start));
   for (const event of unique) {
+    const dateLines = event.allDay
+      ? [
+          `DTSTART;VALUE=DATE:${formatIcsDate(event.start)}`,
+          `DTEND;VALUE=DATE:${nextIcsDate(event.start)}`,
+        ]
+      : [
+          `DTSTART;TZID=America/New_York:${formatIcsLocal(event.start)}00`,
+          `DTEND;TZID=America/New_York:${formatIcsLocal(addMinutes(event.start, event.durationMinutes))}00`,
+        ];
     lines.push(
       "BEGIN:VEVENT",
       `UID:${event.id}@us-economic-calendar`,
       `DTSTAMP:${stamp(now)}`,
-      `DTSTART;TZID=America/New_York:${formatIcsLocal(event.start)}00`,
-      `DTEND;TZID=America/New_York:${formatIcsLocal(addMinutes(event.start, event.durationMinutes))}00`,
+      ...dateLines,
       `SUMMARY:${escapeText(event.title)}`,
       `DESCRIPTION:${escapeText(`${event.description}${metricLines(event.metrics)}\n时间均为美国东部时间，iOS 会自动换算为本地时间。`)}`,
       `URL:${event.sourceUrl}`,

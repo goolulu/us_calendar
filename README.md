@@ -1,6 +1,6 @@
-# U.S. Economic Calendar
+# U.S. Economic & Earnings Calendar
 
-A public iCalendar subscription service for iPhone, iPad, and macOS Calendar, deployed on Cloudflare Workers.
+A public iCalendar subscription service for iPhone, iPad, and macOS Calendar, deployed on Cloudflare Workers. One feed combines U.S. economic releases with earnings announcements for companies in the S&P 500 and Nasdaq-100.
 
 ## Live Calendar
 
@@ -19,8 +19,9 @@ The calendar includes:
 - Employment Situation / Nonfarm Payrolls (NFP)
 - Weekly initial and continuing unemployment claims
 - FOMC interest rate decisions
+- Earnings announcements for S&P 500 and Nasdaq-100 constituents
 
-The service uses official agency schedules for release times. When an FMP API key is configured, event descriptions are enriched with selected previous and actual values. Events use the `America/New_York` time zone, and calendar clients automatically convert them to the user's local time.
+Official agency schedules determine economic release times. When an FMP API key is configured during snapshot generation, economic event descriptions are enriched with selected previous and actual values. Earnings dates and sessions are estimates and can change. Events use the `America/New_York` time zone, and calendar clients automatically convert them to the user's local time.
 
 ## Local Development
 
@@ -28,10 +29,13 @@ Node.js 20 or later is required.
 
 ```bash
 npm install
+npm run seed:earnings -- --local
 npm test
 npm run typecheck
 npm run dev
 ```
+
+The local seed is optional when working only on the economic calendar, but it is required to preview earnings events. It writes only to Wrangler's ignored local state directory. The seed reads the optional `FMP_API_KEY` environment variable when value enrichment is wanted.
 
 Local endpoints:
 
@@ -41,20 +45,34 @@ Local endpoints:
 
 ## Deployment
 
-Log in to Cloudflare and deploy the Worker:
+Log in to Cloudflare and deploy the Worker. Wrangler automatically provisions the `EARNINGS_DATA` KV namespace declared in `wrangler.toml`, so no account-specific KV namespace ID needs to be committed:
 
 ```bash
 npx wrangler login
-npx wrangler secret put FMP_API_KEY
 npm run deploy
+npm run seed:earnings
 ```
 
-`FMP_API_KEY` is optional. Without it, or whenever FMP is unavailable, the Worker continues publishing the official release schedule without values. Do not add the key to `wrangler.toml` or commit it to the repository.
+Run the commands in that order: deploy first, then seed manually once. The seed command initializes the constituent lists, the complete earnings window, optional economic values, and the generated calendar snapshot in the remote KV namespace.
+
+`FMP_API_KEY` is optional. Set it in the seed process environment to add previous and actual values to generated snapshots. You can also run `npx wrangler secret put FMP_API_KEY` so value enrichment remains available if the Worker must generate a degraded fallback response. Without the key, or whenever FMP is unavailable, the calendar continues publishing schedules without values. Never add the key to `wrangler.toml` or commit it.
+
+### Automated earnings refresh
+
+The repository includes a GitHub Actions workflow that runs `npm run seed:earnings` every day at 06:34 and 18:34 UTC. It can also be started manually with **Actions → Refresh calendar → Run workflow**. Before enabling it, add these repository Actions secrets under **Settings → Secrets and variables → Actions**:
+
+- `CLOUDFLARE_API_TOKEN`: an account-scoped, least-privilege token with `Workers KV Storage: Write` and `Workers Scripts: Read`; the latter lets Wrangler resolve the auto-provisioned binding from the deployed Worker
+- `CLOUDFLARE_ACCOUNT_ID`: the Cloudflare account that owns the Worker and KV namespace
+- `FMP_API_KEY`: optional; enriches economic events in generated snapshots
+
+Each workflow run fetches the full earnings window and publishes all KV records in one bulk operation. If any earnings date fails, the job refuses to publish, so the last complete snapshot remains available. Fetching and generation therefore run in GitHub Actions instead of a Worker Cron invocation, keeping the Worker request path within Workers Free CPU limits.
+
+[GitHub automatically disables scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) in a public repository after 60 days without repository activity. Monitor `/health` and the **Actions** page; if this repository becomes inactive, re-enable the workflow manually or move the schedule to an external runner.
 
 After deployment, the subscription URL will look like this:
 
 ```text
-https://us-economic-calendar.<your-workers-subdomain>.workers.dev/calendar.ics
+https://us-calendar.<your-workers-subdomain>.workers.dev/calendar.ics
 ```
 
 On an iPhone, open the Worker landing page and select **Subscribe on iPhone**. Alternatively, navigate to:
@@ -71,15 +89,15 @@ https://us-calendar.hrn961110.workers.dev/calendar.ics
 
 ### `GET /calendar.ics`
 
-Returns the public UTF-8 iCalendar feed. The response is cached for six hours and includes the `text/calendar` content type.
+Returns the public UTF-8 iCalendar feed containing economic releases and qualifying S&P 500/Nasdaq-100 earnings announcements. The response includes the `text/calendar` content type.
 
 ### `GET /health`
 
-Returns the generation time, number of available events, the status of each schedule source, and FMP value coverage. A schedule source can have one of these states:
+Returns the generation time, number of events, schedule-source status, earnings coverage, constituent freshness, and FMP value coverage. Schedule and earnings sources use these states:
 
-- `ok`: live official schedule data was available
-- `fallback`: the verified local schedule was used
-- `unavailable`: neither live nor fallback data was available
+- `ok`: the latest upstream data was available
+- `fallback`: cached, secondary, or bundled data was used
+- `unavailable`: neither current nor fallback data was available
 
 ### `GET /`
 
@@ -93,21 +111,25 @@ Returns a small landing page containing a `webcal://` subscription link and the 
 - [DOL Economic Data](https://www.dol.gov/newsroom/economicdata) for unemployment claims
 - [Federal Reserve FOMC Calendar](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm) for rate decisions
 - [Financial Modeling Prep Economic Calendar](https://site.financialmodelingprep.com/developer/docs/stable/economics-calendar) for optional previous and actual values
+- [Nasdaq Earnings Calendar](https://www.nasdaq.com/market-activity/earnings) for estimated company earnings dates and sessions
+- [Wikipedia list of S&P 500 companies](https://en.wikipedia.org/wiki/List_of_S%26P_500_companies) and [Nasdaq-100](https://en.wikipedia.org/wiki/Nasdaq-100) for index membership
 
-The Worker refreshes its cached output every six hours. If an official page cannot be reached or parsed, that source independently falls back to the verified schedule in `src/generated.ts`, so one upstream failure does not break the entire feed.
+Economic schedule sources retain their independent fallback data in `src/generated.ts`, so one upstream failure does not break the entire feed. GitHub Actions refreshes the full earnings window and index membership twice daily, then uploads the generated KV records as one batch. The most recent successful earnings snapshot remains available when an upstream request fails.
 
-FMP data is requested in 90-day ranges and cached separately for six hours. It only enriches an event after a known U.S. indicator name and release date match. It never overrides the official release time or source. The free plan and endpoint access can change; confirm that your FMP account permits the endpoint and your intended use before publishing the enriched feed.
+FMP data is requested in 90-day ranges. It only enriches an event after a known U.S. indicator name and release date match, and it never overrides the official release time or source. The free plan and endpoint access can change; confirm that your FMP account permits the endpoint and your intended use before publishing the enriched feed.
 
 When BLS, BEA, or ADP publishes a new annual schedule, update the fallback records in `src/generated.ts` and run the test suite. Weekly unemployment claims are normally scheduled for Thursday at 8:30 a.m. Eastern Time. A release that conflicts with a federal holiday is moved to Wednesday.
 
 ## Calendar Behavior
 
 - Event UIDs are based on the release category and reporting period rather than the publication date. Rescheduled releases therefore update the existing event instead of creating duplicates.
-- Previous and actual values appear in the event description. FMP forecast values are intentionally not included.
+- Previous and actual values can appear in economic event descriptions. FMP forecast values are intentionally not included.
 - FOMC events represent the interest rate decision at 2:00 p.m. Eastern Time on the final meeting day. FOMC minutes are not included.
-- The feed covers the previous 90 days and the next 15 months.
+- Economic events cover the previous 90 days and the next 15 months. Earnings events cover the previous 30 days through the next 30 days.
+- Earnings reported as before market open are placed at approximately 8:00 a.m. Eastern Time; after-market announcements are placed at approximately 4:00 p.m. Eastern Time. Announcements without a known session are all-day events.
+- A company present in both the S&P 500 and Nasdaq-100 appears only once, with both memberships shown in its event details.
 - Events do not contain forced alarms or reminders.
-- The feed is public and does not require a token, account, or database.
+- The feed is public and does not require a token or account. Cloudflare KV stores earnings data and the generated feed snapshot.
 
 ## Testing
 
@@ -119,4 +141,8 @@ npm run typecheck
 npx wrangler deploy --dry-run
 ```
 
-The tests cover official schedule parsing, source-specific fallback behavior, stable event identifiers, unemployment-claims holiday adjustments, iCalendar line folding, UTF-8 content, and CRLF formatting.
+The tests cover economic schedules and value enrichment, Nasdaq earnings normalization, index parsing and fallbacks, stable identifiers, overlapping-index deduplication, KV snapshots, approximate reporting sessions, all-day events, iCalendar line folding, UTF-8 content, and CRLF formatting.
+
+## Acknowledgements
+
+The rolling earnings-calendar approach was inspired by [OhEarningsCal](https://github.com/jason5ng32/OhEarningsCal).

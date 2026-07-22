@@ -8,7 +8,8 @@ export function pad(value: number): string {
 }
 
 export function monthNumber(value: string): number | undefined {
-  return MONTHS[value.trim().toLowerCase()];
+  const normalized = value.trim().toLowerCase();
+  return MONTHS[normalized] ?? (normalized.length >= 3 ? Object.entries(MONTHS).find(([month]) => month.startsWith(normalized))?.[1] : undefined);
 }
 
 export function localDateTime(year: number, month: number, day: number, time: string): string | undefined {
@@ -34,6 +35,22 @@ export function formatIcsLocal(local: string): string {
 
 export function isoDate(date: Date): string {
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+export function shiftIsoDate(value: string, days: number): string {
+  const [year, month, day] = value.split("-").map(Number);
+  return isoDate(new Date(Date.UTC(year, month - 1, day + days)));
+}
+
+export function newYorkDate(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
 export function previousMonth(year: number, month: number): { year: number; month: number } {

@@ -76,6 +76,7 @@ const RULES: Record<Category, MetricRule[]> = {
   fomc: [
     { key: "fed-interest-rate", label: "联邦基金目标利率", patterns: [/\b(?:fed|federal\s+reserve|fomc)\b.*\b(?:interest|funds|target)\s+rate\b/i] },
   ],
+  earnings: [],
 };
 
 function isUsCountry(value: unknown): boolean {

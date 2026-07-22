@@ -2,7 +2,7 @@ import { isoDate, localDateTime } from "./date";
 import { adpEvent } from "./parsers";
 import type { CalendarEvent, Category } from "./types";
 
-type FallbackRelease = [category: Exclude<Category, "claims" | "fomc" | "adp">, period: string, start: string];
+type FallbackRelease = [category: Exclude<Category, "claims" | "fomc" | "adp" | "earnings">, period: string, start: string];
 
 // Verified against the official schedules on 2026-07-14. Live agency data always
 // wins; these records keep the feed useful during temporary upstream failures.

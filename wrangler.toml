@@ -8,6 +8,9 @@ enabled = true
 # Optional value enrichment. Configure as a secret, never as a [vars] value:
 # npx wrangler secret put FMP_API_KEY
 
+[[kv_namespaces]]
+binding = "EARNINGS_DATA"
+
 # 可选：设置后，/calendar.ics 必须携带 ?token=对应值
 # [vars]
 # CALENDAR_TOKEN = "change-me"
