@@ -13,6 +13,8 @@ export interface CalendarEvent {
   /** Stable identity. It must not change when an agency reschedules a release. */
   id: string;
   category: Category;
+  /** Canonical ticker for earnings events, used to build personalized feeds. */
+  stockSymbol?: string;
   title: string;
   description: string;
   /** America/New_York local time (YYYY-MM-DDTHH:mm), or YYYY-MM-DD when allDay is true. */

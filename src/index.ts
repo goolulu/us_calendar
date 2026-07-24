@@ -7,7 +7,15 @@ import {
 } from "./earnings";
 import { fallbackAdp, fallbackFomc, fallbackReleases, generateClaims } from "./generated";
 import { createIcs } from "./ics";
+import { managementPage } from "./page";
 import { parseAdp, parseBea, parseBls, parseFomc } from "./parsers";
+import {
+  buildStockCatalog,
+  filterEventsForStocks,
+  filterIcsForStocks,
+  icsEventCount,
+  requestedStocks,
+} from "./subscriptions";
 import type { CalendarEvent, SourceStatus, ValueStatus } from "./types";
 import { enrichEventsWithFmp } from "./values";
 
@@ -44,6 +52,14 @@ interface HealthSnapshot {
   events: number;
   sources: SourceStatus[];
   values: ValueStatus;
+}
+
+interface StockCatalogResponse {
+  version: 1;
+  source: "kv" | "bundled";
+  updatedAt: string;
+  counts: { unique: number; sp500: number; nasdaq100: number };
+  stocks: ReturnType<typeof buildStockCatalog>;
 }
 
 async function getText(url: string): Promise<string> {
@@ -153,16 +169,6 @@ export async function buildEvents(now: Date, options: BuildOptions = {}): Promis
   return { events: valueResult.events, sources, values: valueResult.status, generatedAt: now.toISOString() };
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
-}
-
-function page(url: URL): string {
-  const httpsUrl = `${url.origin}/calendar.ics`;
-  const webcalUrl = `webcal://${url.host}/calendar.ics`;
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>美国经济与财报日历</title><style>body{font:16px/1.65 system-ui,-apple-system,sans-serif;max-width:720px;margin:10vh auto;padding:0 24px;color:#172033;background:#f7f9fc}.card{background:white;padding:32px;border-radius:18px;box-shadow:0 8px 36px #17203312}h1{line-height:1.2}.button{display:inline-block;background:#1769e0;color:white;text-decoration:none;padding:12px 20px;border-radius:10px}code{display:block;overflow-wrap:anywhere;background:#f0f3f8;padding:10px;border-radius:8px;color:#465064}small{color:#657085}</style></head><body><main class="card"><h1>美国经济数据与重点公司财报日历</h1><p>包含 CPI、PPI、PCE、ADP、非农、失业金、FOMC，以及 S&amp;P 500 和 Nasdaq-100 成分股财报；可选显示经济数据前值和实际值。</p><p><a class="button" href="${escapeHtml(webcalUrl)}">在 iPhone 中订阅</a></p><p>也可以在“设置 → 日历 → 日历账户 → 添加已订阅的日历”中粘贴：</p><code>${escapeHtml(httpsUrl)}</code><small>时间按美国东部时间发布，iOS 会自动换算。财报盘前/盘后时刻为约定显示，实际日期与时段可能调整；订阅源不强制设置提醒。</small></main></body></html>`;
-}
-
 function metadataFor(result: BuildResult): CalendarMetadata {
   return {
     generatedAt: result.generatedAt,
@@ -172,7 +178,7 @@ function metadataFor(result: BuildResult): CalendarMetadata {
   };
 }
 
-function calendarHeaders(metadata: CalendarMetadata): HeadersInit {
+function calendarHeaders(metadata: CalendarMetadata, selection: ReadonlySet<string> | null = null): HeadersInit {
   return {
     "content-type": "text/calendar; charset=utf-8",
     "content-disposition": "inline; filename=us-economic-and-earnings-calendar.ics",
@@ -183,6 +189,7 @@ function calendarHeaders(metadata: CalendarMetadata): HeadersInit {
       "x-calendar-value-metrics": String(metadata.values.metrics),
     } : {}),
     ...(metadata.fallbackSources.length ? { "x-calendar-fallback": metadata.fallbackSources.join(",") } : {}),
+    ...(selection !== null ? { "x-calendar-selected-stocks": String(selection.size) } : {}),
   };
 }
 
@@ -190,10 +197,22 @@ function buildOptions(env: Env): BuildOptions {
   return { fmpApiKey: env.FMP_API_KEY, earningsKv: env.EARNINGS_DATA };
 }
 
-async function calendarResponse(now: Date, env: Env = {}): Promise<Response> {
+async function calendarResponse(
+  now: Date,
+  env: Env = {},
+  selection: ReadonlySet<string> | null = null,
+): Promise<Response> {
   const result = await buildEvents(now, buildOptions(env));
-  if (!result.events.length) return Response.json({ error: "No calendar events available", sources: result.sources }, { status: 503 });
-  return new Response(createIcs(result.events, now), { headers: calendarHeaders(metadataFor(result)) });
+  const events = filterEventsForStocks(result.events, selection);
+  if (!events.length) return Response.json({ error: "No calendar events available", sources: result.sources }, { status: 503 });
+  const metadata = metadataFor({ ...result, events });
+  if (selection !== null) {
+    console.info("[calendar] built personalized fallback feed", {
+      selectedStocks: selection.size,
+      events: events.length,
+    });
+  }
+  return new Response(createIcs(events, now), { headers: calendarHeaders(metadata, selection) });
 }
 
 export async function rebuildSnapshot(env: Env, now = new Date()): Promise<HealthSnapshot> {
@@ -208,19 +227,106 @@ export async function rebuildSnapshot(env: Env, now = new Date()): Promise<Healt
     sources: result.sources,
     values: result.values,
   };
-  await env.EARNINGS_DATA.put(EARNINGS_KV_KEYS.calendar, createIcs(result.events, now), { metadata: metadataFor(result) });
+  const metadata = metadataFor(result);
+  await env.EARNINGS_DATA.put(EARNINGS_KV_KEYS.calendar, createIcs(result.events, now), { metadata });
+  await env.EARNINGS_DATA.put(EARNINGS_KV_KEYS.calendarEvents, JSON.stringify(result.events), { metadata });
   await env.EARNINGS_DATA.put(EARNINGS_KV_KEYS.health, JSON.stringify(health));
   return health;
 }
 
-async function storedCalendarResponse(kv: KVNamespace): Promise<Response | undefined> {
+async function storedCalendarResponse(
+  kv: KVNamespace,
+  selection: ReadonlySet<string> | null,
+): Promise<Response | undefined> {
+  if (selection !== null) {
+    try {
+      const storedEvents = await kv.getWithMetadata<CalendarEvent[], CalendarMetadata>(
+        EARNINGS_KV_KEYS.calendarEvents,
+        "json",
+      );
+      if (storedEvents.value && storedEvents.metadata) {
+        const events = filterEventsForStocks(storedEvents.value, selection);
+        const metadata = { ...storedEvents.metadata, events: events.length };
+        const generatedAt = new Date(metadata.generatedAt);
+        const stamp = Number.isNaN(generatedAt.getTime()) ? new Date() : generatedAt;
+        console.info("[calendar] served personalized KV snapshot", {
+          selectedStocks: selection.size,
+          events: events.length,
+        });
+        return new Response(createIcs(events, stamp), { headers: calendarHeaders(metadata, selection) });
+      }
+    } catch (error) {
+      console.warn("[calendar] structured KV snapshot unavailable; trying ICS snapshot", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   try {
     const stored = await kv.getWithMetadata<CalendarMetadata>(EARNINGS_KV_KEYS.calendar, "text");
     if (!stored.value || !stored.metadata) return undefined;
-    return new Response(stored.value, { headers: calendarHeaders(stored.metadata) });
-  } catch {
+    const value = filterIcsForStocks(stored.value, selection);
+    const metadata = selection === null ? stored.metadata : { ...stored.metadata, events: icsEventCount(value) };
+    if (selection !== null) {
+      console.info("[calendar] served personalized legacy ICS snapshot", {
+        selectedStocks: selection.size,
+        events: metadata.events,
+      });
+    }
+    return new Response(value, { headers: calendarHeaders(metadata, selection) });
+  } catch (error) {
+    console.warn("[calendar] KV calendar snapshot read failed; building fallback", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
+}
+
+async function stockCatalogResponse(env: Env, now: Date): Promise<Response> {
+  let indices: IndexDataset | null = null;
+  let source: StockCatalogResponse["source"] = "bundled";
+  if (env.EARNINGS_DATA) {
+    try {
+      indices = await env.EARNINGS_DATA.get<IndexDataset>(EARNINGS_KV_KEYS.indices, "json");
+      if (indices) source = "kv";
+    } catch (error) {
+      console.warn("[stocks] KV constituent read failed; using bundled catalog", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  indices ??= bundledIndexDataset(now);
+  const stocks = buildStockCatalog(indices);
+  const body: StockCatalogResponse = {
+    version: 1,
+    source,
+    updatedAt: indices.updatedAt,
+    counts: {
+      unique: stocks.length,
+      sp500: indices.sp500.length,
+      nasdaq100: indices.nasdaq100.length,
+    },
+    stocks,
+  };
+  return Response.json(body, {
+    headers: { "cache-control": "public, max-age=900, s-maxage=3600, stale-if-error=86400" },
+  });
+}
+
+function pageResponse(): Response {
+  return new Response(managementPage(), {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "public, max-age=900",
+      "content-security-policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function withoutBody(response: Response): Response {
+  return new Response(null, { status: response.status, headers: response.headers });
 }
 
 async function healthResponse(env: Env, now: Date): Promise<Response> {
@@ -256,12 +362,22 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405, headers: { allow: "GET, HEAD" } });
-    if (url.pathname === "/") return new Response(page(url), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600" } });
-    if (url.pathname === "/health") return healthResponse(env, new Date());
-    if (url.pathname !== "/calendar.ics") return new Response("Not found", { status: 404 });
-    const response = env.EARNINGS_DATA
-      ? await storedCalendarResponse(env.EARNINGS_DATA) ?? await calendarResponse(new Date(), env)
-      : await calendarResponse(new Date(), env);
-    return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response;
+    const now = new Date();
+    let response: Response;
+    if (url.pathname === "/") {
+      response = pageResponse();
+    } else if (url.pathname === "/api/stocks") {
+      response = await stockCatalogResponse(env, now);
+    } else if (url.pathname === "/health") {
+      response = await healthResponse(env, now);
+    } else if (url.pathname === "/calendar.ics") {
+      const selection = requestedStocks(url);
+      response = env.EARNINGS_DATA
+        ? await storedCalendarResponse(env.EARNINGS_DATA, selection) ?? await calendarResponse(now, env, selection)
+        : await calendarResponse(now, env, selection);
+    } else {
+      response = new Response("Not found", { status: 404 });
+    }
+    return request.method === "HEAD" ? withoutBody(response) : response;
   },
 } satisfies ExportedHandler<Env>;

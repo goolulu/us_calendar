@@ -103,6 +103,7 @@ export function createIcs(events: CalendarEvent[], now = new Date()): string {
       `DESCRIPTION:${escapeText(`${event.description}${metricLines(event.metrics)}\n时间均为美国东部时间，iOS 会自动换算为本地时间。`)}`,
       `URL:${event.sourceUrl}`,
       `CATEGORIES:${event.category.toUpperCase()}`,
+      ...(event.stockSymbol ? [`X-STOCK-SYMBOL:${escapeText(event.stockSymbol)}`] : []),
       "STATUS:CONFIRMED",
       "TRANSP:TRANSPARENT",
       "END:VEVENT",

@@ -7,6 +7,7 @@ export const EARNINGS_KV_KEYS = {
   past: "earnings:past:v1",
   future: "earnings:future:v1",
   calendar: "calendar:v2",
+  calendarEvents: "calendar:events:v1",
   health: "health:v2",
 } as const;
 
@@ -259,6 +260,7 @@ function eventFromCandidate(candidate: Candidate): CalendarEvent {
   return {
     id: `earnings-${symbol.toLowerCase()}-${period}`,
     category: "earnings",
+    stockSymbol: symbol,
     title: `📊 ${row.symbol} ${companyName} 财报${timing.suffix}`,
     description: details.join("\n"),
     start: timing.start,

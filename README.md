@@ -1,6 +1,6 @@
 # U.S. Economic & Earnings Calendar
 
-A public iCalendar subscription service for iPhone, iPad, and macOS Calendar, deployed on Cloudflare Workers. One feed combines U.S. economic releases with earnings announcements for companies in the S&P 500 and Nasdaq-100.
+A public iCalendar subscription service for iPhone, iPad, and macOS Calendar, deployed on Cloudflare Workers. One feed combines U.S. economic releases with earnings announcements for companies in the S&P 500 and Nasdaq-100. The landing page lets each subscriber search and select the companies they want in a personal feed.
 
 ## Live Calendar
 
@@ -11,6 +11,8 @@ Subscribe using the public calendar URL:
 On Apple devices, you can also open this one-click subscription link:
 
 **[Subscribe in Apple Calendar](webcal://us-calendar.hrn961110.workers.dev/calendar.ics)**
+
+Open the Worker root URL to manage a smaller personalized feed. Stock selections are saved in the browser and encoded in the subscription URL; they never replace the complete constituent, earnings, event, and ICS snapshots stored in KV.
 
 The calendar includes:
 
@@ -40,6 +42,7 @@ The local seed is optional when working only on the economic calendar, but it is
 Local endpoints:
 
 - Subscription page: `http://localhost:8787/`
+- Stock catalog API: `http://localhost:8787/api/stocks`
 - Calendar feed: `http://localhost:8787/calendar.ics`
 - Source health: `http://localhost:8787/health`
 
@@ -65,7 +68,7 @@ The repository includes a GitHub Actions workflow that runs `npm run seed:earnin
 - `CLOUDFLARE_ACCOUNT_ID`: the Cloudflare account that owns the Worker and KV namespace
 - `FMP_API_KEY`: optional; enriches economic events in generated snapshots
 
-Each workflow run fetches the full earnings window and publishes all KV records in one bulk operation. If any earnings date fails, the job refuses to publish, so the last complete snapshot remains available. Fetching and generation therefore run in GitHub Actions instead of a Worker Cron invocation, keeping the Worker request path within Workers Free CPU limits.
+Each workflow run fetches the full earnings window and publishes all KV records in one bulk operation. The publish includes the full structured event snapshot as well as the prebuilt full ICS; per-user stock selection is applied only when a calendar is requested. If any earnings date fails, the job refuses to publish, so the last complete snapshot remains available. Fetching and generation therefore run in GitHub Actions instead of a Worker Cron invocation, keeping the Worker request path within Workers Free CPU limits.
 
 [GitHub automatically disables scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) in a public repository after 60 days without repository activity. Monitor `/health` and the **Actions** page; if this repository becomes inactive, re-enable the workflow manually or move the schedule to an external runner.
 
@@ -91,6 +94,18 @@ https://us-calendar.hrn961110.workers.dev/calendar.ics
 
 Returns the public UTF-8 iCalendar feed containing economic releases and qualifying S&P 500/Nasdaq-100 earnings announcements. The response includes the `text/calendar` content type.
 
+With no query parameter, this endpoint preserves the original all-stock feed. A personalized feed uses a comma-separated `stocks` query parameter:
+
+```text
+https://us-calendar.hrn961110.workers.dev/calendar.ics?stocks=AAPL,MSFT,NVDA
+```
+
+`stocks=NONE` (or an explicitly empty `stocks=` value) returns economic releases without company earnings. Economic releases are always included in personalized feeds.
+
+### `GET /api/stocks`
+
+Returns the deduplicated stock catalog used by the management page, including company names, industries, and S&P 500/Nasdaq-100 membership. It reads the latest full constituent snapshot from KV and falls back to the bundled symbol list if KV is unavailable.
+
 ### `GET /health`
 
 Returns the generation time, number of events, schedule-source status, earnings coverage, constituent freshness, and FMP value coverage. Schedule and earnings sources use these states:
@@ -101,7 +116,7 @@ Returns the generation time, number of events, schedule-source status, earnings 
 
 ### `GET /`
 
-Returns a small landing page containing a `webcal://` subscription link and the HTTPS calendar URL.
+Returns the stock subscription management page.
 
 ## Data Sources
 
@@ -128,6 +143,8 @@ When BLS, BEA, or ADP publishes a new annual schedule, update the fallback recor
 - Economic events cover the previous 90 days and the next 15 months. Earnings events cover the previous 30 days through the next 30 days.
 - Earnings reported as before market open are placed at approximately 8:00 a.m. Eastern Time; after-market announcements are placed at approximately 4:00 p.m. Eastern Time. Announcements without a known session are all-day events.
 - A company present in both the S&P 500 and Nasdaq-100 appears only once, with both memberships shown in its event details.
+- Personalized stock selections filter only the response. Scheduled refreshes still fetch and publish the full index and earnings datasets to KV.
+- The management page keeps selections in local browser storage and in the generated subscription URL; it does not create per-user KV records.
 - Events do not contain forced alarms or reminders.
 - The feed is public and does not require a token or account. Cloudflare KV stores earnings data and the generated feed snapshot.
 
